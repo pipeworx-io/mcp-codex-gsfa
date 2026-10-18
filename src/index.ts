@@ -43,7 +43,17 @@ interface McpToolExport {
  * mg/kg" and "allowed because its parent category is" are different answers.
  */
 
-import { GSFA_RAW } from './data.js';
+
+// fleet #3286: data.ts is a ~1.06MB generated literal (GSFA_RAW, a JSON
+// string of ~15,000 provisions). It used to be a static VALUE import, which
+// put the whole blob into every gateway isolate's bundle whether or not that
+// isolate ever served this pack (fleet #2754's rule). It is now loaded from
+// KV on this pack's first call and injected as `args._bakedIndex` — see
+// workers/gateway/src/pack-baked-indexes.json and pack-static-blobs.ts.
+//
+// NEVER value-import './data' here again — a value import puts the whole
+// blob back into every isolate and the deploy workflow's bundle-size ceiling
+// fails the deploy.
 
 interface RawProvision { t: 1 | 3; cat: string | null; lvl: string | null; n?: number[] }
 interface RawAdditive {
@@ -71,26 +81,54 @@ interface GsfaData {
   additives: RawAdditive[];
 }
 
-const DATA: GsfaData = JSON.parse(GSFA_RAW);
+const EMPTY_DATA: GsfaData = {
+  source: '',
+  cac_sessions_present: [],
+  counts: { additives: 0, categories: 0, provisions: 0, notes: 0 },
+  notes: {},
+  unresolved_additive_ids: [],
+  categories: [],
+  additives: [],
+};
 
-const CATEGORY_BY_NUMBER = new Map(DATA.categories.map((c) => [c.number, c]));
+let DATA: GsfaData = EMPTY_DATA;
+let CATEGORY_BY_NUMBER = new Map<string, RawCategory>();
+let KNOWN_PARENTS = new Set<string>();
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /**
- * Categories are derived from the provisions that reference them, so a parent
- * with no provisions of its own never appears — we hold 13.1.1/13.1.2/13.1.3
- * but not 13.1, even though 13.1 (Infant formulae) is a real Codex category.
- * Saying "not in the GSFA category system" for those was wrong and would talk a
- * caller out of a category that genuinely exists. Track them separately so we
- * can say the true thing: we have no provisions referencing it.
+ * Populate DATA/CATEGORY_BY_NUMBER/KNOWN_PARENTS from `args._bakedIndex` on
+ * this isolate's first call into the pack. Memoized for the isolate's life
+ * (DATA !== EMPTY_DATA guards it); loud on a missing/malformed index —
+ * answering from an empty dataset would read as "no provision", a silent
+ * wrong answer about what is and is not permitted in food.
  */
-const KNOWN_PARENTS = new Set<string>();
-for (const c of DATA.categories) {
-  const parts = c.number.split('.');
-  for (let i = 1; i < parts.length; i++) {
-    const parent = parts.slice(0, i).join('.');
-    if (!CATEGORY_BY_NUMBER.has(parent)) KNOWN_PARENTS.add(parent);
+function ensureIndex(args: Record<string, unknown>): void {
+  if (DATA !== EMPTY_DATA) return;
+  const idx = args._bakedIndex as Record<string, unknown> | null | undefined;
+  const raw = idx?.GSFA_RAW;
+  if (typeof raw !== 'string' || !raw) {
+    throw new Error(
+      `codex-gsfa: the baked GSFA index is unavailable (${idx == null ? 'not injected' : 'malformed'}). ` +
+        'The gateway loads it from KV on the first call into this pack; this is a server-side fault, not a bad additive or category — retry shortly.',
+    );
+  }
+  DATA = JSON.parse(raw) as GsfaData;
+  CATEGORY_BY_NUMBER = new Map(DATA.categories.map((c) => [c.number, c]));
+
+  // Categories are derived from the provisions that reference them, so a parent
+  // with no provisions of its own never appears — we hold 13.1.1/13.1.2/13.1.3
+  // but not 13.1, even though 13.1 (Infant formulae) is a real Codex category.
+  // Saying "not in the GSFA category system" for those was wrong and would talk a
+  // caller out of a category that genuinely exists. Track them separately so we
+  // can say the true thing: we have no provisions referencing it.
+  for (const c of DATA.categories) {
+    const parts = c.number.split('.');
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join('.');
+      if (!CATEGORY_BY_NUMBER.has(parent)) KNOWN_PARENTS.add(parent);
+    }
   }
 }
 
@@ -282,6 +320,7 @@ const tools: McpToolExport['tools'] = [
 ];
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  ensureIndex(args);
   const limitOf = (d: number) => {
     const n = Number(args.limit);
     return Number.isFinite(n) && n > 0 ? Math.min(n, 1000) : d;
