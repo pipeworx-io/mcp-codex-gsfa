@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-codex-gsfa",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Codex GSFA — the FAO/WHO General Standard for Food Additives (CXS 192-1995).",
   "type": "module",
   "main": "lib/index.js",
@@ -27,7 +27,7 @@
     "mode": "gateway",
     "slug": "codex-gsfa",
     "gatewaySlug": "codex-gsfa",
-    "sourceHash": "v1-4e5568c2e69057c7b35d2ec345f3affac82a6124443fe5e7e8c9bbd37753d2cb",
-    "sourceCommit": "4277282d72f9bf55e548b3799aaf737baf22152f"
+    "sourceHash": "v1-7a94b7725fef13f8d14cb17a52f6e9d958f3215e2ea83eef76b337417aba2299",
+    "sourceCommit": "8cc978183948532674e797c429305c9d8ab2a1c3"
   }
 }
